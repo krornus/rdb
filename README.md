@@ -22,4 +22,5 @@ Do not include ```.rs``` in the example name
     - reading from /proc/pid/mem directly does not work
     - dereferencing unmapped sections gives io error
 - Parallelize HashMemory
-
+- Change DebugError to enum
+    - impl Error for DebugError { ... }

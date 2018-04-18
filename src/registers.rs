@@ -1,12 +1,48 @@
-use libc::user_regs_struct;
 use std::fmt;
+use std::convert::Into;
 use std::result::Result;
+
+use libc::user_regs_struct;
 
 use debugger::Debugger;
 use error::DebugError;
 
-#[derive(Copy, Clone)]
-pub struct Registers {
+pub trait Cast<T> {
+    fn cast(self) -> T;
+}
+
+impl Cast<usize> for u64 {
+    fn cast(self) -> usize {
+        self as usize
+    }
+}
+
+impl Cast<u64> for usize {
+    fn cast(self) -> u64 {
+        self as u64
+    }
+}
+
+pub trait Register {
+    type Size where
+        Self::Size: Cast<usize>,
+        usize: Cast<Self::Size>;
+
+    fn ip(&self) -> Self::Size;
+    fn sp(&self) -> Self::Size;
+    fn bp(&self) -> Self::Size;
+    fn set_ip(&mut self, ptr: Self::Size);
+    fn set_sp(&mut self, ptr: Self::Size);
+    fn set_bp(&mut self, ptr: Self::Size);
+    fn mask(&self, reg: Self) -> Self;
+    fn stack_offset(&self, offset: Self::Size) -> Self::Size;
+    fn size_from(n: i64) -> Self::Size;
+}
+
+/* x86-64 */
+#[allow(non_camel_case_types)]
+#[derive(Debug, Copy, Clone)]
+pub struct x86_64_Registers {
     pub r15: u64,
     pub r14: u64,
     pub r13: u64,
@@ -37,7 +73,7 @@ pub struct Registers {
 }
 
 #[allow(non_camel_case_types)]
-pub enum Register {
+pub enum x86_64_Register {
     r15,
     r14,
     r13,
@@ -67,9 +103,53 @@ pub enum Register {
     gs,
 }
 
-impl Registers {
-    pub fn from_process(dbg: &Debugger, args: Vec<u64>) -> Result<Self, DebugError> {
+impl Register for x86_64_Registers {
 
+    type Size = u64;
+
+    fn ip(&self) -> Self::Size {
+        self.rip
+    }
+
+    fn sp(&self) -> Self::Size {
+        self.rsp
+    }
+
+    fn bp(&self) -> Self::Size {
+        self.rbp
+    }
+
+    fn set_ip(&mut self, ptr: Self::Size) {
+        self.rip = ptr;
+    }
+
+    fn set_sp(&mut self, ptr: Self::Size) {
+        self.rsp = ptr;
+    }
+
+    fn set_bp(&mut self, ptr: Self::Size) {
+        self.rbp = ptr;
+    }
+
+    fn mask(&self, mut reg: Self) -> Self {
+        reg.rip = self.rip;
+        reg.rsp = self.rsp;
+        reg.rbp =  self.rbp;
+
+        reg
+    }
+
+    fn stack_offset(&self, offset: Self::Size) -> Self::Size {
+        self.rsp + offset
+    }
+
+    fn size_from(n: i64) -> Self::Size {
+        n as Self::Size
+    }
+}
+
+impl x86_64_Registers {
+    pub fn from_process(dbg: &Debugger, args: Vec<u64>) -> Result<Self, DebugError> {
 
         let mut regs = dbg.process.getregs()?;
 
@@ -138,9 +218,9 @@ impl Registers {
     }
 }
 
-impl From<user_regs_struct> for Registers {
+impl From<user_regs_struct> for x86_64_Registers {
     fn from(other: user_regs_struct) -> Self {
-        Registers {
+        x86_64_Registers {
             r15: other.r15,
             r14: other.r14,
             r13: other.r13,
@@ -172,7 +252,7 @@ impl From<user_regs_struct> for Registers {
     }
 }
 
-impl Into<user_regs_struct> for Registers {
+impl Into<user_regs_struct> for x86_64_Registers {
     fn into(self) -> user_regs_struct {
         user_regs_struct {
             r15: self.r15,
@@ -206,7 +286,7 @@ impl Into<user_regs_struct> for Registers {
     }
 }
 
-impl<'a> Into<user_regs_struct> for &'a Registers {
+impl<'a> Into<user_regs_struct> for &'a x86_64_Registers {
     fn into(self) -> user_regs_struct {
         user_regs_struct {
             r15: self.r15,
@@ -240,9 +320,9 @@ impl<'a> Into<user_regs_struct> for &'a Registers {
     }
 }
 
-impl Default for Registers {
+impl Default for x86_64_Registers {
     fn default() -> Self {
-        Registers {
+        x86_64_Registers {
             r15: 0,
             r14: 0,
             r13: 0,
@@ -274,7 +354,7 @@ impl Default for Registers {
     }
 }
 
-impl fmt::Display for Registers {
+impl fmt::Display for x86_64_Registers {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         /* TODO include flags */
         write!(f,

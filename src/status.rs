@@ -1,4 +1,4 @@
-use libc::{waitpid, WIFSTOPPED, WIFEXITED, WIFSIGNALED, WSTOPSIG, WTERMSIG};
+use libc::{waitpid, WIFSTOPPED, WIFEXITED, WIFSIGNALED, WSTOPSIG, WTERMSIG, WCOREDUMP};
 use nix::sys::signal::Signal;
 
 #[derive(Debug,Clone,Copy)]
@@ -19,8 +19,20 @@ impl Status {
         Status { status: sig }
     }
 
+    pub fn running(&self) -> bool {
+        return !self.stopped()
+            && !self.exited()
+            /* allow for sigint */
+            && (!self.signaled() && self.signal() != Some(Signal::SIGINT))
+            && !self.coredumped()
+    }
+
     pub fn stopped(&self) -> bool {
         unsafe { WIFSTOPPED(self.status) }
+    }
+
+    pub fn coredumped(&self) -> bool {
+        unsafe { WCOREDUMP(self.status) }
     }
 
     pub fn exited(&self) -> bool {

@@ -1,13 +1,13 @@
 use process::Process;
 use error::DebugError;
-use registers::Register;
+use registers::{Register,x86_64_Registers};
 
 #[derive(Debug,Clone)]
 pub struct Breakpoint {
     pub addr: u64,
     pub name: String,
     enabled: bool,
-    process: Process,
+    process: Process<x86_64_Registers>,
     restore: u64,
 }
 
@@ -61,7 +61,8 @@ impl Breakpoint {
     pub fn restore(&self) -> Result<u64, DebugError> {
 
         self.process.poke(self.addr, self.restore)?;
-        self.process.setreg(Register::rip, self.addr)?;
+        let addr = self.addr;
+        self.set_ip(addr)?;
 
         Ok(self.addr)
     }
@@ -92,7 +93,7 @@ impl Breakpoint {
     pub fn restore_to(&self, addr: u64) -> Result<u64, DebugError> {
 
         self.process.poke(self.addr, self.restore)?;
-        self.process.setreg(Register::rip, addr)?;
+        self.set_ip(addr)?;
 
         Ok(addr)
     }
@@ -112,13 +113,20 @@ impl Breakpoint {
         /* push return address (this breakpoint again) */
         self.process.push(pc)?;
         /* jump to function */
-        self.process.setreg(Register::rip, addr)?;
+        self.set_ip(addr)?;
 
         /* continue */
         self.process.cont()?;
         self.process.wait_stop()
     }
 
+    fn set_ip(&self, addr: u64) -> Result<u64, DebugError> {
+        let mut regs = self.process.getregs()?;
+        regs.set_ip(addr);
+        self.process.setregs(&regs)?;
+
+        Ok(regs.ip())
+    }
 }
 
 

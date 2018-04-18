@@ -6,30 +6,48 @@ use libc::{
     PTRACE_CONT,
     PTRACE_PEEKTEXT,
     PTRACE_POKETEXT,
-    PTRACE_SINGLESTEP
+    PTRACE_SINGLESTEP,
+    PTRACE_ATTACH,
+    PTRACE_DETACH,
 };
 use nix::{errno,Errno};
 
 use std::ptr;
+use std::mem;
 use std::result::Result;
 use std::cell::Cell;
+use std::marker::PhantomData;
 
 use status::Status;
 use error::DebugError;
-use registers::{Register,Registers};
+use registers::{Register,Cast};
 
 #[derive(Debug,Clone)]
-pub struct Process {
+pub struct Process<T> {
     pub pid: u32,
     pub status: Cell<Status>,
+    marker: PhantomData<T>,
 }
 
-impl Process {
+macro_rules! rsize {
+    ($x: ty) => {
+        <T as Register>::Size
+    }
+}
+
+impl<T> Process<T>
+    where
+        T: Register + Default + Clone,
+        T: From<user_regs_struct> + Into<user_regs_struct>,
+        <T as Register>::Size: Cast<usize>,
+        usize: Cast<<T as Register>::Size>,
+    {
 
     pub fn new(pid: u32) -> Self {
         Process {
             pid: pid,
             status: Cell::new(Status::new(0)),
+            marker: PhantomData,
         }
     }
 
@@ -37,13 +55,14 @@ impl Process {
         self.status.get().clone()
     }
 
-    pub fn wait_stop(&self) -> Result<u64, DebugError> {
+    pub fn wait_stop(&self) -> Result<rsize!(T), DebugError> {
         let stat = self.wait();
 
         if stat.stopped() {
-            let ip = self.getregs()
+            let regs = self.getregs()
                 .expect("failed to get registers of process");
-            Ok(ip.rip)
+
+            Ok(regs.ip())
         } else {
             Err(DebugError::from(stat))
         }
@@ -70,7 +89,7 @@ impl Process {
         }
     }
 
-    pub fn peek(&self, addr: u64) -> Result<u64, DebugError> {
+    pub fn peek(&self, addr: rsize!(T)) -> Result<rsize!(T), DebugError> {
         unsafe {
             Errno::clear();
 
@@ -79,45 +98,46 @@ impl Process {
             if errno::errno() != 0 {
                 Err(DebugError::from(Errno::last()))
             } else {
-                Ok(res as u64)
+                Ok(T::size_from(res))
             }
         }
     }
 
-    pub fn setregs_user(&self, mut regs: Registers) -> Result<i64, DebugError> {
-        let cregs = self.getregs()?;
-        regs.rip = cregs.rip;
-        regs.rsp = cregs.rsp;
-        regs.rbp = cregs.rbp;
+    pub fn setregs_user(&self, regs: T) -> Result<i64, DebugError> {
 
-        self.setregs(&mut regs)
+        let mregs = self.getregs()?;
+
+        self.setregs(&mut mregs.mask(regs))
     }
 
-    pub fn stack(&self, offset: u64) -> Result<u64, DebugError> {
-        let regs = self.getregs()?;
-        let sp = regs.rsp + offset;
+    pub fn stack(&self, offset: rsize!(T)) -> Result<rsize!(T), DebugError> {
+        let sp = self.getregs()?
+            .stack_offset(offset);
 
         self.peek(sp)
     }
 
-    pub fn push(&self, data: u64) -> Result<u64, DebugError> {
+    pub fn push(&self, data: rsize!(T)) -> Result<rsize!(T), DebugError> {
         let mut regs = self.getregs()?;
-        regs.rsp -= 0x8;
+        let ip = regs.ip();
+        regs.set_ip(
+            (ip.cast() - mem::size_of::<rsize!(T)>()).cast()
+        );
 
         self.setregs(&regs)?;
-        self.poke(regs.rsp, data)?;
+        self.poke(regs.sp(), data)?;
 
-        Ok(regs.rsp)
+        Ok(regs.sp())
     }
 
-    pub fn retn(&self) -> Result<u64, DebugError> {
+    pub fn retn(&self) -> Result<rsize!(T), DebugError> {
         let regs = self.getregs()?;
-        let retn = regs.rbp + 0x8;
+        let retn = regs.bp().cast() + 0x8;
 
-        self.peek(retn)
+        self.peek(retn.cast())
     }
 
-    pub fn poke(&self, addr: u64, word: u64) -> Result<i64, DebugError> {
+    pub fn poke(&self, addr: rsize!(T), word: rsize!(T)) -> Result<i64, DebugError> {
         unsafe {
             Errno::clear();
 
@@ -131,10 +151,38 @@ impl Process {
         }
     }
 
-    pub fn getregs(&self) -> Result<Registers, DebugError> {
+    pub fn attach(&self) -> Result<i64, DebugError> {
+        unsafe {
+            Errno::clear();
+
+            let res = ptrace(PTRACE_ATTACH, self.pid, ptr::null::<c_void>(), ptr::null::<c_void>());
+
+            if errno::errno() != 0 {
+                Err(DebugError::from(Errno::last()))
+            } else {
+                Ok(res)
+            }
+        }
+    }
+
+    pub fn detach(&self) -> Result<i64, DebugError> {
+        unsafe {
+            Errno::clear();
+
+            let res = ptrace(PTRACE_DETACH, self.pid, ptr::null::<c_void>(), ptr::null::<c_void>());
+
+            if errno::errno() != 0 {
+                Err(DebugError::from(Errno::last()))
+            } else {
+                Ok(res)
+            }
+        }
+    }
+
+    pub fn getregs(&self) -> Result<T, DebugError> {
 
         unsafe {
-            let mut regs: user_regs_struct = Registers::default().into();
+            let mut regs: user_regs_struct = T::default().into();
             Errno::clear();
 
             ptrace(PTRACE_GETREGS, self.pid, ptr::null::<c_void>(), &mut regs);
@@ -142,7 +190,7 @@ impl Process {
             if errno::errno() != 0 {
                 Err(DebugError::from(Errno::last()))
             } else {
-                Ok(Registers::from(regs))
+                Ok(T::from(regs))
             }
         }
     }
@@ -164,9 +212,9 @@ impl Process {
         ret
     }
 
-    pub fn setregs(&self, regs: &Registers) -> Result<i64, DebugError> {
+    pub fn setregs(&self, regs: &T) -> Result<i64, DebugError> {
 
-        let urs: user_regs_struct = regs.into();
+        let urs: user_regs_struct = regs.clone().into();
         unsafe {
             Errno::clear();
 
@@ -178,96 +226,5 @@ impl Process {
                 Ok(ret)
             }
         }
-    }
-
-    pub fn setreg(&self, reg: Register, value: u64) -> Result<i64, DebugError> {
-
-        let mut register = self.getregs()?;
-
-        match reg {
-            Register::r15 => {
-                register.r15 = value;
-            },
-            Register::r14 => {
-                register.r14 = value;
-            },
-            Register::r13 => {
-                register.r13 = value;
-            },
-            Register::r12 => {
-                register.r12 = value;
-            },
-            Register::rbp => {
-                register.rbp = value;
-            },
-            Register::rbx => {
-                register.rbx = value;
-            },
-            Register::r11 => {
-                register.r11 = value;
-            },
-            Register::r10 => {
-                register.r10 = value;
-            },
-            Register::r9 => {
-                register.r9 = value;
-            },
-            Register::r8 => {
-                register.r8 = value;
-            },
-            Register::rax => {
-                register.rax = value;
-            },
-            Register::rcx => {
-                register.rcx = value;
-            },
-            Register::rdx => {
-                register.rdx = value;
-            },
-            Register::rsi => {
-                register.rsi = value;
-            },
-            Register::rdi => {
-                register.rdi = value;
-            },
-            Register::orig_rax => {
-                register.orig_rax = value;
-            },
-            Register::rip => {
-                register.rip = value;
-            },
-            Register::cs => {
-                register.cs = value;
-            },
-            Register::eflags => {
-                register.eflags = value;
-            },
-            Register::rsp => {
-                register.rsp = value;
-            },
-            Register::ss => {
-                register.ss = value;
-            },
-            Register::fs_base => {
-                register.fs_base = value;
-            },
-            Register::gs_base => {
-                register.gs_base = value;
-            },
-            Register::ds => {
-                register.ds = value;
-            },
-            Register::es => {
-                register.es = value;
-            },
-            Register::fs => {
-                register.fs = value;
-            },
-            Register::gs => {
-                register.gs = value;
-            },
-        }
-
-        self.setregs(&register)
     }
 }

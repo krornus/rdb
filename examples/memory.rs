@@ -2,81 +2,68 @@
 extern crate rdb;
 
 use rdb::debugger::{Debugger,LogLevel};
-use rdb::processio::ProcessIO;
+use rdb::memory;
 
 fn main() {
 
     let file = "./bin/test".to_string();
-    let mut dbg = Debugger::new(file.clone(), vec![file])
+
+    let mut dbg = Debugger::new(file.clone(), vec![file, "/bin/sh".to_string()])
         .expect("Could not start binary");
+
     dbg.log = LogLevel::Breakpoints | LogLevel::Commands;
 
-    dbg.register_action(|dbg| {
-        println!("==========================================");
-        println!("{}", dbg.process.getregs().unwrap());
-        println!("==========================================");
+    let main_addr = 0x4005d0;
+    let loop_cmp = 0x4005ef;
+    let main_loop = 0x4005e1;
+
+    bp!(dbg, main_addr, name: "main::entry", enabled: true);
+    bp!(dbg, loop_cmp,  name: "main::compare", enabled: true);
+    bp!(dbg, main_loop, name: "main::loop", enabled: true);
+
+    /* force program to infinite loop by always setting loop counter to 1 */
+    dbg.register_action_at(loop_cmp, |dbg| {
+        let regs = dbg.process.getregs()
+            .expect("failed to get registers");
+        let addr = regs.rbp - 0x4;
+        dbg.process.poke(addr, 0x1)
+            .expect("failed to write to memory");
+
+        println!("Set loop counter to 1");
+        /* auto continue */
+        cont!(dbg);
     });
 
-    let main_addr = 0x4005a7;
-
-    let main_retn = 0x4005dc;
-    let puts_addr = 0x4005fa;
-    let main_loop =  0x4005b8;
-
-    let bar_addr = 0x4005a7;
-    let bar_exit = 0x4005cf;
-
-    let foo_addr = 0x400592;
-    let foo_str  = 0x40059b;
-    let _foo_printf = 0x4005a0;
-    let foo_exit = 0x4005a6;
-
-    bp!(dbg, main_addr, name: "main::entry", enabled: false);
-    bp!(dbg, main_retn, name: "main::retn", enabled: false);
-    bp!(dbg, main_loop, name: "main::loop", enabled: false);
-    bp!(dbg, foo_exit, name: "foo::exit", enabled: false);
-    bp!(dbg, puts_addr, name: "main::puts", enabled: true);
-    bp!(dbg, foo_addr, name: "foo::entry", enabled: true);
-    bp!(dbg, foo_str, name: "foo::str", enabled: true);
-    bp!(dbg, bar_addr, name: "bar::entry", enabled: true);
+    let pid = dbg.child.id() as usize;
 
     dbg.run()
         .expect("couldnt run");
 
-    /* lets get the address of the string used in foo */
-    dbg.phantom_call(foo_addr, vec![], vec![foo_exit])
-        .expect("failed to execute phantom call");
-
-    /* foo::entry */
+    cont!(dbg);
+    cont!(dbg);
     cont!(dbg);
 
-    let regs = dbg.process.getregs()
-        .expect("failed to getregs");
-    let foo_str_addr = regs.rdi;
+    let mut mem = memory::Memory::load(pid)
+        .expect("Failed to load memory");
+    let bp = dbg.process.getregs().
+        expect("failed to getregs").rbp - 4;
 
-    /* foo::str */
-    cont!(dbg);
+    /* read loop counter using memory module */
+    println!("Memory read: {:?}", mem.read(bp as usize, 4));
 
-    /* cleanup registers before leaving phantom_call_cleanup */
-    dbg.process.setregs_user(regs)
-      .expect("failed to setregs");
+    /* search memory for set of u8 values */
+    /* lowest address mapped in memory */
+    let min = mem.min();
+    /* highest address mapped in memory */
+    let max = mem.max();
+    /* search values vector takes a vec![AsRef<[u8]>] */
+    let results = mem.search(min, max, vec![b"/bin/sh\x00"], 8);
 
-
-    dbg.phantom_call(bar_addr, vec![0xdeadbeef, foo_str_addr], vec![bar_exit])
-        .expect("failed to execute phantom call");
-
-    /* bar::entry */
-    cont!(dbg);
-
-    /* cleanup registers before leaving phantom_call_cleanup */
-    dbg.process.setregs_user(regs)
-        .expect("failed to setregs");
-
-    /* at breakpoint main::puts */
-    cont!(dbg);
-
-    if let Some(o) = dbg.child.stdout() {
-        println!("{}", o);
+    for binsh in results {
+        println!("'/bin/sh' @ offset 0x{:x} (0x{:x}) in '{}'",
+            binsh.offset, binsh.address, binsh.region.pathname.unwrap_or("".to_string()));
     }
 
+    cont!(dbg);
+    cont!(dbg);
 }

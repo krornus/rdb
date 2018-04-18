@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use breakpoint::Breakpoint;
 use process::Process;
 use status::Status;
-use registers::Registers;
+use registers::{Register,x86_64_Registers};
 use error::DebugError;
 
 #[macro_export]
@@ -21,7 +21,7 @@ macro_rules! pc {
             let regs = $child.getregs()
                 .expect("pc! failed to get registers");
 
-            regs.rip
+            regs.ip()
         }
     }
 }
@@ -64,7 +64,7 @@ bitflags! {
 
 
 pub struct Debugger {
-    pub process: Process,
+    pub process: Process<x86_64_Registers>,
     pub breakpoints: HashMap<u64,Breakpoint>,
     pub file: String,
     pub args: Vec<String>,
@@ -83,7 +83,7 @@ impl Debugger {
     {
 
         let child = Debugger::spawn(binary.clone(), args.clone())?;
-        let process = Process::new(child.id());
+        let process = Process::<x86_64_Registers>::new(child.id());
         let pc = pc!(process);
 
         let d = Debugger {
@@ -175,28 +175,50 @@ impl Debugger {
 
         self.log_command("continue");
 
-        let pc = {
-            let bp = self.current_breakpoint()?;
-
-            match bp.cont() {
-                Ok(pc) => pc,
-                Err(DebugError::Status(stat)) => {
-                    return self.handle_status(stat);
-                },
-                Err(x) => {
-                    return Err(x);
+        let pc = match self.current_breakpoint() {
+            Ok(bp) => {
+                match bp.cont() {
+                    Ok(pc) => {
+                        self.log_breakpoint();
+                        pc
+                    },
+                    Err(DebugError::Status(stat)) => {
+                        return self.handle_status(stat);
+                    },
+                    Err(x) => {
+                        return Err(x);
+                    }
+                }
+            },
+            Err(_) => {
+                match self.non_bp_cont()? {
+                    Some(ip) => ip,
+                    None => { return Ok(None); }
                 }
             }
         };
 
-
         self.set_pc(pc);
-        self.log_breakpoint();
         self.on_break();
 
         Ok(Some(pc))
     }
 
+    fn non_bp_cont(&self) -> Result<Option<u64>, DebugError> {
+        self.process.cont()?;
+        let ip = self.process.wait_stop()?;
+
+        Ok(Some(ip))
+    }
+
+    pub fn single_step(&self) -> Result<Option<u64>, DebugError> {
+        self.log_command("continue");
+
+        self.process.step()?;
+        let ip = self.process.wait_stop()?;
+        self.on_break();
+        Ok(Some(ip))
+    }
 
     pub fn phantom_call(&mut self, addr: u64, args: Vec<u64>, exits: Vec<u64>)
         -> Result<Option<u64>, DebugError>
@@ -204,7 +226,7 @@ impl Debugger {
 
         self.log_command(&format!("phantom call function @ 0x{:x}", addr));
 
-        let arg_regs = Registers::from_process(self, args)?;
+        let arg_regs = x86_64_Registers::from_process(self, args)?;
 
         for ex in exits {
             self.breakpoint(ex)
@@ -228,6 +250,17 @@ impl Debugger {
         self.on_break();
 
         Ok(Some(pc))
+    }
+
+    pub fn at_breakpoint(&self) -> bool {
+        if let Some(pc) = *self.pc.borrow() {
+            match self.breakpoint_at(pc) {
+                Some(_) => true,
+                None => false,
+            }
+        } else {
+            false
+        }
     }
 
     pub fn current_breakpoint(&self) -> Result<&Breakpoint, DebugError> {
