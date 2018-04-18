@@ -1,24 +1,23 @@
 use std::fs::File;
 use std::io::{Read,SeekFrom,Seek};
-use std::str::FromStr;
-use std::fmt;
 use std::str;
 use std::ops::Range;
 
-use regex::{Regex,bytes};
-use vm_info::{ProcessId, mapped_region};
+use regex::bytes;
+use vm_info::ProcessId;
+use vm_info::mapped_region::{self,MemoryRegion};
 
 use error::DebugError;
 
 #[derive(Debug)]
 pub struct Memory {
+    pub maps: Vec<MemoryRegion>,
     file: File,
-    maps: Vec<mapped_region::MemoryRegion>,
 }
 
 #[derive(Debug)]
 pub struct FoundMemory {
-    pub region: mapped_region::MemoryRegion,
+    pub region: MemoryRegion,
     pub offset: usize,
     pub address: usize,
 }
@@ -68,7 +67,8 @@ impl Memory {
 
     /* TODO make search with regex possible */
     pub fn search<T: AsRef<[u8]>>(&mut self, start: usize, len: usize, values: Vec<T>, size: usize)
-        -> Vec<FoundMemory> {
+        -> Vec<FoundMemory>
+    {
 
         let rexprs = values.iter().filter_map(|v| regex_from_u8(v.as_ref(), size).ok()).collect();
         let srange = start..start+len;
@@ -89,7 +89,10 @@ impl Memory {
         }).collect()
     }
 
-    fn get_matches<'a>(region: &'a mapped_region::MemoryRegion, rexprs: &'a Vec<bytes::Regex>, bytes: &[u8]) -> Vec<FoundMemory> {
+    /* FIXME remove collect */
+    fn get_matches<'a>(region: &'a MemoryRegion, rexprs: &'a Vec<bytes::Regex>, bytes: &[u8])
+        -> Vec<FoundMemory>
+    {
             rexprs.iter().flat_map(|re| {
                 re.find_iter(bytes).map(|m| {
                     FoundMemory {
@@ -123,7 +126,7 @@ trait InRange<Idx: PartialOrd + Copy> {
     fn end(&self) -> Idx;
 }
 
-impl InRange<usize> for mapped_region::MemoryRegion {
+impl InRange<usize> for MemoryRegion {
     fn start(&self) -> usize {
         self.start_address
     }
@@ -142,122 +145,3 @@ impl<T: PartialOrd + Copy> InRange<T> for Range<T> {
         self.end
     }
 }
-
-bitflags! {
-    struct Permissions: u32 {
-        #[allow(non_upper_case_globals)]
-        const Read = 0b10000;
-        #[allow(non_upper_case_globals)]
-        const Write = 0b01000;
-        #[allow(non_upper_case_globals)]
-        const Execute = 0b00100;
-        #[allow(non_upper_case_globals)]
-        const Shared = 0b00010;
-        #[allow(non_upper_case_globals)]
-        const Private = 0b00001;
-    }
-}
-
-impl Permissions {
-    pub fn read(&self) -> bool {
-        self.contains(Permissions::Read)
-    }
-
-    pub fn write(&self) -> bool {
-        self.contains(Permissions::Write)
-    }
-
-    pub fn execute(&self) -> bool {
-        self.contains(Permissions::Execute)
-    }
-
-    pub fn shared(&self) -> bool {
-        self.contains(Permissions::Shared)
-    }
-
-    pub fn private(&self) -> bool {
-        self.contains(Permissions::Private)
-    }
-}
-
-impl FromStr for Permissions {
-    type Err = DebugError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let err = DebugError::Error("Invalid permission string");
-        lazy_static! {
-            static ref VSIZE_RE: Regex =
-                Regex::new(r"[r\-][w\-][x\-][sp\-]").unwrap();
-        }
-
-        if !VSIZE_RE.is_match(s) {
-            return Err(err);
-        }
-
-
-        let mut flag = Permissions::empty();
-        let b = s.as_bytes();
-
-        if b[0] == 'r' as u8 {
-            flag |= Permissions::Read;
-        }
-
-        if b[1] == 'w' as u8 {
-            flag |= Permissions::Write;
-        }
-
-        if b[2] == 'x' as u8 {
-            flag |= Permissions::Write;
-        }
-
-        if b[3] == 'p' as u8 {
-            flag |= Permissions::Private;
-        } else if b[3] == 's' as u8 {
-            flag |= Permissions::Shared;
-        }
-
-        Ok(flag)
-    }
-}
-
-impl fmt::Display for Permissions {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut out = String::new();
-
-        if self.shared() {
-            out.push('s')
-        } else if self.private() {
-            out.push('p')
-        } else {
-            out.push('-')
-        }
-
-        if self.execute() {
-            out.push('x')
-        } else {
-            out.push('-')
-        }
-
-        if self.write() {
-            out.push('w')
-        } else {
-            out.push('-')
-        }
-
-        if self.read() {
-            out.push('r')
-        } else {
-            out.push('-')
-        }
-        write!(f, "{}", out)
-    }
-}
-
-pub struct HashedMemory {
-    pub nblocks: usize,
-    pub blocksize: usize,
-    pub blocks: Vec<Vec<u8>>,
-    pub pid: usize,
-}
-
-

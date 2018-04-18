@@ -1,5 +1,4 @@
 extern crate libc;
-extern crate num;
 extern crate nix;
 extern crate posix;
 extern crate spawn_ptrace;
@@ -9,7 +8,6 @@ extern crate memmap;
 extern crate vm_info;
 
 #[macro_use] extern crate bitflags;
-#[macro_use] extern crate lazy_static;
 
 pub mod debugger;
 pub mod registers;
