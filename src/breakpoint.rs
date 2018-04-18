@@ -1,3 +1,5 @@
+use std::hash::{Hash, Hasher};
+
 use process::Process;
 use error::DebugError;
 use registers::{Register,x86_64_Registers};
@@ -10,6 +12,24 @@ pub struct Breakpoint {
     process: Process<x86_64_Registers>,
     restore: u64,
 }
+
+impl Hash for Breakpoint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.addr.hash(state);
+        self.name.hash(state);
+        self.process.pid.hash(state);
+    }
+}
+
+impl PartialEq for Breakpoint {
+    fn eq(&self, other: &Breakpoint) -> bool {
+        self.addr == other.addr &&
+        self.name == other.name &&
+        self.process.pid == other.process.pid
+    }
+}
+
+impl Eq for Breakpoint { }
 
 impl Breakpoint {
     pub fn new(name: String, pid: u32, addr: u64) -> Result<Breakpoint, DebugError> {
@@ -29,6 +49,10 @@ impl Breakpoint {
         bp.restore = data;
 
         Ok(bp)
+    }
+
+    pub fn finish(&mut self) -> &Breakpoint {
+        self
     }
 
     #[inline]

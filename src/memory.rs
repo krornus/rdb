@@ -52,7 +52,7 @@ impl Memory {
 
         self.maps.iter().find(|m| {
             (m.start_address..m.end_address).contains_value(addr) &&
-            addr + len < m.end_address
+            addr + len <= m.end_address
         }).ok_or(DebugError::Error("Address is not mapped in memory"))?;
 
         let mut buf = Vec::with_capacity(len);
@@ -66,6 +66,7 @@ impl Memory {
     }
 
     /* TODO make search with regex possible */
+    /* TODO need a way to differentiate results */
     pub fn search<T: AsRef<[u8]>>(&mut self, start: usize, len: usize, values: Vec<T>, size: usize)
         -> Vec<FoundMemory>
     {
@@ -80,7 +81,7 @@ impl Memory {
             (srange.contains_value(r.start()) || srange.contains_value(r.end()))
         }).map(|region| {
             let start = region.start();
-            let len = region.end()-region.start() - 1;
+            let len = region.end()-region.start();
             (region.clone(), self.read(start,len))
         }).filter(|&(_, ref bytes)| {
             bytes.is_ok()
@@ -105,6 +106,7 @@ impl Memory {
     }
 }
 
+/* TODO dont loop regex, add a union operator instead */
 fn regex_from_u8(bytes: &[u8], len: usize) -> Result<bytes::Regex, DebugError> {
     let pad = bytes.len() as isize - len as isize;
 
