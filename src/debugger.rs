@@ -13,6 +13,8 @@ use process::Process;
 use status::Status;
 use registers::{Register,x86_64_Registers};
 use error::DebugError;
+use phantom::PhantomManager;
+//use manager::Manager;
 
 #[macro_export]
 macro_rules! pc {
@@ -71,6 +73,8 @@ pub struct Debugger {
     pub child: Child,
     pub pc: OptionCell<u64>,
     pub log: LogLevel,
+    phantom_mgr: Rc<RefCell<PhantomManager<x86_64_Registers>>>,
+    //breakpoint_mgr: Rc<RefCell<Manager>>,
     actions_at: CellMap<u64,Vec<BoxedDebuggerFn>>,
     actions: CellVec<BoxedDebuggerFn>,
     init_state: bool,
@@ -83,7 +87,8 @@ impl Debugger {
     {
 
         let child = Debugger::spawn(binary.clone(), args.clone())?;
-        let process = Process::<x86_64_Registers>::new(child.id());
+        let pid = child.id();
+        let process = Process::<x86_64_Registers>::new(pid);
         let pc = pc!(process);
 
         let d = Debugger {
@@ -93,6 +98,8 @@ impl Debugger {
             file: binary,
             args: args,
             child: child,
+            //breakpoint_mgr: Rc::new(RefCell::new(Manager::new(pid as usize, Some(pc)))),
+            phantom_mgr: Rc::new(RefCell::new(PhantomManager::new(pid.into()))),
             init_state: false,
             log: LogLevel::Silent,
             pc: Rc::new(RefCell::new(Some(pc))),
@@ -162,6 +169,19 @@ impl Debugger {
 
         let pid = self.process.pid;
 
+        let name = (self.breakpoints.len()+1).to_string();
+        let bp = Breakpoint::new(name, pid, addr)?;
+
+        self.log_command(&format!("set breakpoint {} @ 0x{:x}", self.breakpoints.len(), addr));
+        self.breakpoints.insert(addr+1, bp);
+
+        Ok(self.breakpoint_at_mut(addr+1).unwrap())
+    }
+
+    pub fn tmp_breakpoint(&mut self, addr: u64) -> Result<&mut Breakpoint, DebugError> {
+
+        let pid = self.process.pid;
+
         let name = self.breakpoints.len().to_string();
         let bp = Breakpoint::new(name, pid, addr)?;
 
@@ -179,7 +199,6 @@ impl Debugger {
             Ok(bp) => {
                 match bp.cont() {
                     Ok(pc) => {
-                        self.log_breakpoint();
                         pc
                     },
                     Err(DebugError::Status(stat)) => {
@@ -200,11 +219,13 @@ impl Debugger {
 
         self.set_pc(pc);
         self.on_break();
+        self.log_breakpoint();
 
         Ok(Some(pc))
     }
 
     fn non_bp_cont(&self) -> Result<Option<u64>, DebugError> {
+        println!(" (not at breakpoint)");
         self.process.cont()?;
         let ip = self.process.wait_stop()?;
 
@@ -212,7 +233,7 @@ impl Debugger {
     }
 
     pub fn single_step(&self) -> Result<Option<u64>, DebugError> {
-        self.log_command("continue");
+        self.log_command("single step");
 
         self.process.step()?;
         let ip = self.process.wait_stop()?;
@@ -227,27 +248,21 @@ impl Debugger {
         self.log_command(&format!("phantom call function @ 0x{:x}", addr));
 
         let arg_regs = x86_64_Registers::from_process(self, args)?;
+        let reset = self.process.getregs()?;
 
-        for ex in exits {
-            self.breakpoint(ex)
-                .expect("failed to set breakpoint")
-                .name("<phantom_call cleanup>");
-
-            self.register_action_at(ex, |dbg| {
-                dbg.cont()
-                    .expect("failed to continue from breakpoint");
-            });
-        }
+        self.phantom_mgr.borrow_mut().push(reset, exits);
 
         /* set args */
-        self.process.setregs(&arg_regs)?;
+        self.process.setregs_user(&arg_regs)?;
 
         let pc = self.current_breakpoint()?
             .phantom_call(addr)?;
 
         self.set_pc(pc);
         self.log_breakpoint();
+        /* callbacks might continue */
         self.on_break();
+
 
         Ok(Some(pc))
     }
@@ -277,7 +292,15 @@ impl Debugger {
 
     pub fn breakpoint_at(&self, addr: u64) -> Option<&Breakpoint> {
 
-        self.breakpoints.get(&addr)
+        if let Some(bp) = self.breakpoints.get(&addr) {
+            if bp.is_enabled() || bp.is_temporary() {
+                Some(bp)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     pub fn current_breakpoint_mut(&mut self) -> Result<&mut Breakpoint, String> {
@@ -296,13 +319,21 @@ impl Debugger {
 
     pub fn breakpoint_at_mut(&mut self, addr: u64) -> Option<&mut Breakpoint> {
 
-        self.breakpoints.get_mut(&addr)
+        if let Some(bp) = self.breakpoints.get_mut(&addr) {
+            if bp.is_enabled() {
+                Some(bp)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     fn log_breakpoint(&self) {
         if self.log.contains(LogLevel::Breakpoints) {
             if let Ok(hit) = self.current_breakpoint() {
-                println!("0x{:x}: Encountered breakpoint {}", self.pc.borrow().unwrap(), hit.name);
+                println!("0x{:x}: Encountered breakpoint {}", hit.addr, hit.name);
             }
         }
     }
@@ -330,6 +361,14 @@ impl Debugger {
     }
 
     fn on_break(&self) {
+        let process = &self.process;
+
+        if self.phantom_mgr.borrow().is_exit(process) {
+            let pc =self.phantom_mgr.borrow_mut().clean(process)
+                .expect("Failed to reset process after phantom call");
+            self.set_pc(pc);
+        }
+
         let pc = match *self.pc.borrow() {
             Some(pc) => pc.clone(),
             None => { return; },

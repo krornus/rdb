@@ -17,6 +17,8 @@ pub mod breakpoint;
 pub mod process;
 pub mod status;
 pub mod memory;
+//mod manager;
+mod phantom;
 
 #[cfg(test)]
 mod tests {

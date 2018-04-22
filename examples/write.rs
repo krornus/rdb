@@ -2,8 +2,8 @@
 extern crate rdb;
 
 use rdb::debugger::{Debugger,LogLevel};
+use rdb::memory;
 use rdb::processio::ProcessIO;
-
 
 fn main() {
 
@@ -16,20 +16,22 @@ fn main() {
     dbg.log = LogLevel::Commands | LogLevel::Breakpoints;
 
     let main_addr = 0x4005d0;
-    let foo_addr = 0x400592;
-    let foo_exit = 0x4005a6;
 
-    bp!(dbg, main_addr, name: "main::entry");
+    bp!(dbg, main_addr, name: "main::entry", enabled: true);
 
     dbg.run()
         .expect("couldnt run");
 
-    /* lets get the address of the string used in foo */
-    dbg.phantom_call(foo_addr, vec![], vec![foo_exit])
-        .expect("failed to execute phantom call");
+    let pid = dbg.child.id();
+    let mut mem = memory::Memory::load(pid as usize)
+        .expect("Failed to load memory");
 
+    mem.write(0x4006ce, b"rust!\x00")
+        .expect("failed to write to memory");
     /* main::entry */
     cont!(dbg);
+
+
 
     if let Some(o) = dbg.child.stdout() {
         println!("{}", o);

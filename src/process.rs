@@ -17,6 +17,7 @@ use std::mem;
 use std::result::Result;
 use std::cell::Cell;
 use std::marker::PhantomData;
+use std::fmt::Display;
 
 use status::Status;
 use error::DebugError;
@@ -38,6 +39,7 @@ macro_rules! rsize {
 impl<T> Process<T>
     where
         T: Register + Default + Clone,
+        T: Display,
         T: From<user_regs_struct> + Into<user_regs_struct>,
         <T as Register>::Size: Cast<usize>,
         usize: Cast<<T as Register>::Size>,
@@ -103,11 +105,11 @@ impl<T> Process<T>
         }
     }
 
-    pub fn setregs_user(&self, regs: T) -> Result<i64, DebugError> {
+    pub fn setregs_user(&self, regs: &T) -> Result<i64, DebugError> {
 
         let mregs = self.getregs()?;
 
-        self.setregs(&mut mregs.mask(regs))
+        self.setregs(&mut mregs.mask(regs.clone()))
     }
 
     pub fn stack(&self, offset: rsize!(T)) -> Result<rsize!(T), DebugError> {
@@ -119,9 +121,9 @@ impl<T> Process<T>
 
     pub fn push(&self, data: rsize!(T)) -> Result<rsize!(T), DebugError> {
         let mut regs = self.getregs()?;
-        let ip = regs.ip();
-        regs.set_ip(
-            (ip.cast() - mem::size_of::<rsize!(T)>()).cast()
+        let sp = regs.sp();
+        regs.set_sp(
+            (sp.cast() - mem::size_of::<rsize!(T)>()).cast()
         );
 
         self.setregs(&regs)?;

@@ -26,7 +26,8 @@ impl Cast<u64> for usize {
 pub trait Register {
     type Size where
         Self::Size: Cast<usize>,
-        usize: Cast<Self::Size>;
+        usize: Cast<Self::Size>,
+        Self: fmt::Display;
 
     fn ip(&self) -> Self::Size;
     fn sp(&self) -> Self::Size;

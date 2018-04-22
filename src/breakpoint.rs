@@ -9,6 +9,7 @@ pub struct Breakpoint {
     pub addr: u64,
     pub name: String,
     enabled: bool,
+    temporary: bool,
     process: Process<x86_64_Registers>,
     restore: u64,
 }
@@ -31,6 +32,15 @@ impl PartialEq for Breakpoint {
 
 impl Eq for Breakpoint { }
 
+impl Drop for Breakpoint {
+    fn drop(&mut self) {
+        match self.restore() {
+            Ok(_) => println!("dropped breakpoint '{}' @ 0x{:x}", self.name, self.addr),
+            Err(_) => println!("failed to drop breakpoint '{}' @ 0x{:x}", self.name, self.addr),
+        }
+    }
+}
+
 impl Breakpoint {
     pub fn new(name: String, pid: u32, addr: u64) -> Result<Breakpoint, DebugError> {
 
@@ -41,6 +51,7 @@ impl Breakpoint {
             addr: addr,
             restore: 0,
             enabled: true,
+            temporary: false,
             name: name,
         };
 
@@ -62,11 +73,20 @@ impl Breakpoint {
     }
 
     pub fn trap(&self) -> Result<u64, DebugError> {
+
         let data = self.process.peek(self.addr)?;
         let trap = (data & !0xff) | 0xcc;
         self.process.poke(self.addr,trap)?;
 
         Ok(data)
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        self.temporary
     }
 
     pub fn enabled(&mut self, e: bool) -> Result<&mut Breakpoint, DebugError> {
@@ -80,6 +100,16 @@ impl Breakpoint {
         }
 
         Ok(self)
+    }
+
+    pub fn temporary(&mut self, e: bool) -> &mut Breakpoint {
+        self.temporary = e;
+
+        if self.enabled && e {
+            self.enabled = false;
+        }
+
+        self
     }
 
     pub fn restore(&self) -> Result<u64, DebugError> {
@@ -101,13 +131,16 @@ impl Breakpoint {
         /* restore instruction, set pc to pc - 1 */
         self.restore()?;
 
-        /* execute restored instruction */
-        /* the process will be sigtrapped */
-        self.process.step()?;
-        self.process.wait_stop()?;
+        if !self.temporary {
 
-        /* re-trap instruction */
-        self.trap()?;
+            /* execute restored instruction */
+            /* the process will be sigtrapped */
+            self.process.step()?;
+            self.process.wait_stop()?;
+
+            /* re-trap instruction */
+            self.trap()?;
+        }
 
         /* continue */
         self.process.cont()?;
@@ -132,10 +165,6 @@ impl Breakpoint {
 
     pub fn phantom_call(&self, addr: u64) -> Result<u64, DebugError> {
 
-        let pc = self.addr;
-
-        /* push return address (this breakpoint again) */
-        self.process.push(pc)?;
         /* jump to function */
         self.set_ip(addr)?;
 

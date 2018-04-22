@@ -1,5 +1,5 @@
-use std::fs::File;
-use std::io::{Read,SeekFrom,Seek};
+use std::fs::{File,OpenOptions};
+use std::io::{Read,Write,SeekFrom,Seek};
 use std::str;
 use std::ops::Range;
 
@@ -27,7 +27,12 @@ impl Memory {
 
         let path = format!("/proc/{}/mem", pid);
 
-        let memory = File::open(path)?;
+        let memory = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(false)
+            .open(path)?;
+
         let regions = mapped_region::iter_mappings(ProcessId::Num(pid as u32))?
             .filter_map(|r|{
                 r.ok()
@@ -48,6 +53,21 @@ impl Memory {
         self.maps.iter().map(|r| r.end()).min().unwrap_or(0)
     }
 
+    /* FIXME: coalesce chunks, if we can write to all then make it one chunk */
+    pub fn write(&mut self, addr: usize, data: &[u8]) -> Result<usize, DebugError> {
+
+        let len = data.len();
+        self.maps.iter().find(|m| {
+            (m.start_address..m.end_address).contains_value(addr) &&
+            addr + len <= m.end_address
+        }).ok_or(DebugError::Error("Address is not mapped in memory"))?;
+
+        self.file.seek(SeekFrom::Start(addr as u64))?;
+        self.file.write(data)?;
+
+        Ok(0)
+    }
+
     pub fn read(&mut self, addr: usize, len: usize) -> Result<Vec<u8>, DebugError> {
 
         self.maps.iter().find(|m| {
@@ -58,7 +78,7 @@ impl Memory {
         let mut buf = Vec::with_capacity(len);
 
         self.file.seek(SeekFrom::Start(addr as u64))?; {
-            let fref = self.file.by_ref();
+            let fref = Write::by_ref(&mut self.file);
             fref.take(len as u64).read_to_end(&mut buf)?;
         }
 

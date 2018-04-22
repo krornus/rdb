@@ -20,7 +20,6 @@ impl ProcessIO for Child {
         }
     }
 
-    /* stupid return type, but write can error, and there can be no stdin pipe */
     fn stdin(&mut self, input: String) -> Option<Result<usize>> {
         match self.stdin {
             Some(ref mut pipe) => {
