@@ -3,10 +3,9 @@ use spawn_ptrace::CommandPtraceSpawn;
 use std::process::{Child,Stdio,Command};
 use std::collections::HashMap;
 use std::result::Result;
-use std::boxed::Box;
-
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
+use std::boxed::Box;
 
 use breakpoint::Breakpoint;
 use process::Process;
@@ -14,7 +13,6 @@ use status::Status;
 use registers::{Register,x86_64_Registers};
 use error::DebugError;
 use phantom::PhantomManager;
-//use manager::Manager;
 
 #[macro_export]
 macro_rules! pc {
@@ -47,9 +45,6 @@ macro_rules! cont {
     }
 }
 
-
-type CellMap<K,V> = Rc<RefCell<HashMap<K,V>>>;
-type CellVec<T> = Rc<RefCell<Vec<T>>>;
 type OptionCell<T> = Rc<RefCell<Option<T>>>;
 type BoxedDebuggerFn = Box<Fn(&Debugger)>;
 
@@ -74,9 +69,8 @@ pub struct Debugger {
     pub pc: OptionCell<u64>,
     pub log: LogLevel,
     phantom_mgr: Rc<RefCell<PhantomManager<x86_64_Registers>>>,
-    //breakpoint_mgr: Rc<RefCell<Manager>>,
-    actions_at: CellMap<u64,Vec<BoxedDebuggerFn>>,
-    actions: CellVec<BoxedDebuggerFn>,
+    actions_at: HashMap<u64,Vec<BoxedDebuggerFn>>,
+    actions: Vec<BoxedDebuggerFn>,
     init_state: bool,
 }
 
@@ -94,16 +88,15 @@ impl Debugger {
         let d = Debugger {
             process: process,
             breakpoints: HashMap::new(),
-            actions: Rc::new(RefCell::new(vec![])),
+            actions: vec![],
             file: binary,
             args: args,
             child: child,
-            //breakpoint_mgr: Rc::new(RefCell::new(Manager::new(pid as usize, Some(pc)))),
             phantom_mgr: Rc::new(RefCell::new(PhantomManager::new(pid.into()))),
             init_state: false,
             log: LogLevel::Silent,
             pc: Rc::new(RefCell::new(Some(pc))),
-            actions_at: Rc::new(RefCell::new(HashMap::new())),
+            actions_at: HashMap::new(),
         };
 
         Ok(d)
@@ -218,8 +211,8 @@ impl Debugger {
         };
 
         self.set_pc(pc);
-        self.on_break();
         self.log_breakpoint();
+        self.on_break();
 
         Ok(Some(pc))
     }
@@ -237,6 +230,7 @@ impl Debugger {
 
         self.process.step()?;
         let ip = self.process.wait_stop()?;
+        self.log_breakpoint();
         self.on_break();
         Ok(Some(ip))
     }
@@ -338,7 +332,7 @@ impl Debugger {
         }
     }
 
-    fn log_command<'actions_at>(&self, cmd: &'actions_at str) {
+    fn log_command<'a>(&self, cmd: &'a str) {
         if self.log.contains(LogLevel::Commands) {
             println!("{}",cmd);
         }
@@ -374,7 +368,7 @@ impl Debugger {
             None => { return; },
         };
 
-        match self.actions_at.borrow().get(&pc) {
+        match self.actions_at.get(&pc) {
             Some(functions) => {
                 for fct in functions {
                     fct(&self);
@@ -383,25 +377,29 @@ impl Debugger {
             None => {},
         };
 
-        for fct in self.actions.borrow().iter() {
+        for fct in self.actions.iter() {
             fct(&self);
         }
     }
 
-    pub fn register_action_at<F>(&self, addr: u64, fct: F)
+    pub fn register_action_at<F>(&mut self, addr: u64, fct: F)
         where F: Fn(&Debugger),
         F: 'static
     {
-            self.actions_at.borrow_mut().entry(addr+1)
+            self.actions_at.entry(addr+1)
                 .or_insert(vec![])
                 .push(Box::new(fct));
     }
 
-    pub fn register_action<F>(&self, fct: F)
+    pub fn clear_actions_at(&mut self, addr: u64) {
+            self.actions_at.remove(&(addr+1));
+    }
+
+    pub fn register_action<F>(&mut self, fct: F)
         where F: Fn(&Debugger),
         F: 'static
     {
-            self.actions.borrow_mut().push(Box::new(fct));
+            self.actions.push(Box::new(fct));
     }
 }
 

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 
 use process::Process;
@@ -8,7 +10,7 @@ use registers::{Register,x86_64_Registers};
 pub struct Breakpoint {
     pub addr: u64,
     pub name: String,
-    enabled: bool,
+    enabled: Rc<RefCell<bool>>,
     temporary: bool,
     process: Process<x86_64_Registers>,
     restore: u64,
@@ -29,14 +31,15 @@ impl PartialEq for Breakpoint {
         self.process.pid == other.process.pid
     }
 }
-
 impl Eq for Breakpoint { }
 
 impl Drop for Breakpoint {
     fn drop(&mut self) {
-        match self.restore() {
-            Ok(_) => println!("dropped breakpoint '{}' @ 0x{:x}", self.name, self.addr),
-            Err(_) => println!("failed to drop breakpoint '{}' @ 0x{:x}", self.name, self.addr),
+        if *self.enabled.borrow() && self.process.status().running() {
+            match self.restore() {
+                Ok(_) => println!("dropped breakpoint '{}' @ 0x{:x}", self.name, self.addr),
+                Err(_) => println!("failed to drop breakpoint '{}' @ 0x{:x}", self.name, self.addr),
+            }
         }
     }
 }
@@ -50,13 +53,12 @@ impl Breakpoint {
             process: process,
             addr: addr,
             restore: 0,
-            enabled: true,
+            enabled: Rc::new(RefCell::new(true)),
             temporary: false,
             name: name,
         };
 
         let data = bp.trap()?;
-
         bp.restore = data;
 
         Ok(bp)
@@ -75,14 +77,15 @@ impl Breakpoint {
     pub fn trap(&self) -> Result<u64, DebugError> {
 
         let data = self.process.peek(self.addr)?;
-        let trap = (data & !0xff) | 0xcc;
-        self.process.poke(self.addr,trap)?;
+
+        self.process.poke_bits(self.addr,0xcc,8)?;
+        *self.enabled.borrow_mut() = true;
 
         Ok(data)
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.enabled
+        *self.enabled.borrow()
     }
 
     pub fn is_temporary(&self) -> bool {
@@ -93,11 +96,11 @@ impl Breakpoint {
 
         if e {
             self.trap()?;
-            self.enabled = true;
         } else {
             self.process.poke(self.addr, self.restore)?;
-            self.enabled = false;
         }
+
+        *self.enabled.borrow_mut() = e;
 
         Ok(self)
     }
@@ -105,8 +108,8 @@ impl Breakpoint {
     pub fn temporary(&mut self, e: bool) -> &mut Breakpoint {
         self.temporary = e;
 
-        if self.enabled && e {
-            self.enabled = false;
+        if self.is_enabled() && e {
+            *self.enabled.borrow_mut() = false;
         }
 
         self
@@ -117,6 +120,7 @@ impl Breakpoint {
         self.process.poke(self.addr, self.restore)?;
         let addr = self.addr;
         self.set_ip(addr)?;
+        *self.enabled.borrow_mut() = false;
 
         Ok(self.addr)
     }
@@ -132,7 +136,6 @@ impl Breakpoint {
         self.restore()?;
 
         if !self.temporary {
-
             /* execute restored instruction */
             /* the process will be sigtrapped */
             self.process.step()?;

@@ -6,6 +6,7 @@ extern crate regex;
 extern crate twox_hash;
 extern crate memmap;
 extern crate vm_info;
+extern crate twoway;
 
 #[macro_use] extern crate bitflags;
 

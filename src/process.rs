@@ -36,12 +36,13 @@ macro_rules! rsize {
     }
 }
 
+/* FIXME: the generics arent working, remove/rework */
 impl<T> Process<T>
     where
         T: Register + Default + Clone,
         T: Display,
         T: From<user_regs_struct> + Into<user_regs_struct>,
-        <T as Register>::Size: Cast<usize>,
+        <T as Register>::Size: Cast<usize> + Copy,
         usize: Cast<<T as Register>::Size>,
     {
 
@@ -137,6 +138,25 @@ impl<T> Process<T>
         let retn = regs.bp().cast() + 0x8;
 
         self.peek(retn.cast())
+    }
+
+    /* for setting less than WORDSIZE */
+    pub fn poke_bits(&self, addr: rsize!(T), word: rsize!(T), nbits: u32) -> Result<i64, DebugError> {
+
+        let mut mask = (-1_isize) as usize;
+        let max_bits: u32 = (mem::size_of::<rsize!(T)>()*8) as u32;
+
+        if nbits > max_bits {
+            return Err("Too many bits requested from poke_bits".into());
+        } else if nbits == 0 {
+            return Err("Must set more than zero bits".into());
+        }
+
+        mask = mask >> (max_bits - nbits);
+        let data: usize = self.peek(addr)?.cast();
+        let word: usize = (data & (!mask)) | word.cast();
+
+        self.poke(addr, word.cast())
     }
 
     pub fn poke(&self, addr: rsize!(T), word: rsize!(T)) -> Result<i64, DebugError> {

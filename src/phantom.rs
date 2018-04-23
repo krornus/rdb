@@ -19,7 +19,7 @@ impl<T> PhantomManager<T>
     where T: Register + Default + Clone,
             T: ::std::fmt::Display,
             T: From<user_regs_struct> + Into<user_regs_struct>,
-            <T as Register>::Size: Cast<usize>,
+            <T as Register>::Size: Cast<usize> + Copy,
             usize: Cast<<T as Register>::Size>,
 {
     pub fn new(pid: u64) -> Self {
