@@ -15,8 +15,8 @@ Do not include ```.rs``` in the example name
 - Iterator functions for breakpoints
 - Add checks for continue function instead of returning Err(PTrace(ESRCH))
     - for continuing when not interrupted
-- Create seperate breakpoint manager for debugger
-    - place in RefCell<> etc... for interior mutability
+- Modularize breakpoints, seperate from debugger?
 - Change DebugError to enum
     - impl Error for DebugError { ... }
 - Parallelize memory searching
+- Fix Process struct genericism stuff

@@ -1,14 +1,22 @@
 #[macro_use]
 extern crate rdb;
 
+use std::os::unix::ffi::OsStringExt;
+use std::ffi::OsString;
+
 use rdb::debugger::{Debugger,LogLevel};
-use rdb::memory::{Memory, MemoryPack, QuerySize, Endianness};
+use rdb::memory::{Memory, PackOptions};
 
 fn main() {
 
-    let file = "./bin/test".to_string();
+    let packer = PackOptions::<u32>::default();
 
-    let mut dbg = Debugger::new(file.clone(), vec![file, "/bin/sh".to_string()])
+    /* if you want an argument outside utf8 range, use OsStrings */
+    let mut dbg = Debugger::new::<OsString>("./bin/test".into(), vec![
+        "./bin/test".into(),
+        "/bin/sh".into(),
+        OsString::from_vec(packer.pack(0xdeadbeef)),
+    ])
         .expect("Could not start binary");
 
     dbg.log = LogLevel::Breakpoints | LogLevel::Commands;
@@ -59,9 +67,12 @@ fn main() {
     /* read loop counter using memory module */
     println!("Memory read: {:?}", mem.read(bp as usize, 4));
 
-    let query = 0xdeadbeef_u32.pack(QuerySize::Length, Endianness::LittleEndian);
+    let query = packer.pack(0xdeadbeef);
+
+
     println!("Query is: {:?}", query);
     let results = mem.search(min, max, query);
+
     for addr in results {
         println!("'0xdeadbeef' @ offset 0x{:x} (0x{:x}) in '{}'",
             addr.offset, addr.address, addr.region.pathname.unwrap_or("".to_string()));
@@ -71,7 +82,11 @@ fn main() {
     cont!(dbg);
 
     /* search memory for set of u8 values */
-    /* search values vector takes a vec![AsRef<[u8]>] */
+    /* search values vector takes an AsRef<[u8]> */
+    /* searching uses twoway algorithm implemented by bluss */
+    /* so no support for multiple search values in one pass */
+    /* should probably TODO that */
+    /* no need to pack if you know the exact bytes you want */
     let results = mem.search(min, max, b"/bin/sh\x00");
 
     for binsh in results {

@@ -6,6 +6,7 @@ use std::result::Result;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::boxed::Box;
+use std::ffi::OsStr;
 
 use breakpoint::Breakpoint;
 use process::Process;
@@ -76,7 +77,7 @@ pub struct Debugger {
 
 impl Debugger {
 
-    pub fn new(binary: String, args: Vec<String>)
+    pub fn new<T: AsRef<OsStr> + Clone>(binary: T, args: Vec<T>)
         -> Result<Self,DebugError>
     {
 
@@ -85,11 +86,15 @@ impl Debugger {
         let process = Process::<x86_64_Registers>::new(pid);
         let pc = pc!(process);
 
+        let args = args.into_iter().map(|s|
+            s.as_ref().to_string_lossy().into_owned()
+        ).collect();
+
         let d = Debugger {
             process: process,
             breakpoints: HashMap::new(),
             actions: vec![],
-            file: binary,
+            file: binary.as_ref().to_string_lossy().into_owned(),
             args: args,
             child: child,
             phantom_mgr: Rc::new(RefCell::new(PhantomManager::new(pid.into()))),
@@ -140,7 +145,7 @@ impl Debugger {
         *self.pc.borrow_mut() = Some(pc);
     }
 
-    fn spawn(fcn: String, args: Vec<String>) -> Result<Child, DebugError> {
+    fn spawn<T: AsRef<OsStr>>(fcn: T, args: Vec<T>) -> Result<Child, DebugError> {
 
         match Command::new(fcn)
             .args(&args)

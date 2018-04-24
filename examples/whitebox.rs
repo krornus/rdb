@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::Read;
 use std::env;
 
-use rdb::debugger::{Debugger,LogLevel};
+use rdb::debugger::{Debugger};
 use rdb::memory;
 use rdb::processio::ProcessIO;
 

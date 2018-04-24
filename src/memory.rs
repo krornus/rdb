@@ -3,6 +3,7 @@ use std::io::{Read,Write,SeekFrom,Seek};
 use std::str;
 use std::mem::transmute;
 use std::ops::Range;
+use std::marker::PhantomData;
 
 use vm_info::ProcessId;
 use vm_info::mapped_region::{self,MemoryRegion,Permissions};
@@ -15,12 +16,13 @@ use error::DebugError;
 const WORDSIZE: usize = 2;
 
 
-#[derive(PartialEq,Eq)]
+#[derive(Clone,PartialEq,Eq)]
 pub enum Endianness {
     BigEndian,
     LittleEndian,
 }
 
+#[derive(Clone)]
 pub enum QuerySize {
     Length,
     Bytes(usize),
@@ -28,6 +30,50 @@ pub enum QuerySize {
     Word,
     Double,
     Quad,
+}
+
+pub struct PackOptions<T> {
+    size: QuerySize,
+    endianness: Endianness,
+    marker: PhantomData<T>,
+}
+
+impl<T> Default for PackOptions<T> {
+    fn default() -> Self {
+        PackOptions {
+            size: QuerySize::Length,
+            endianness: Endianness::LittleEndian,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<T> PackOptions<T> {
+    pub fn new(size: QuerySize, order: Endianness) -> Self {
+        PackOptions {
+            size: size,
+            endianness: order,
+            marker: PhantomData,
+        }
+    }
+
+    pub fn size(&mut self, size: QuerySize) -> &mut Self {
+        self.size = size;
+
+        self
+    }
+
+    pub fn endianness(&mut self, order: Endianness) -> &mut Self {
+        self.endianness = order;
+
+        self
+    }
+}
+
+impl<T: MemoryPack> PackOptions<T> {
+    pub fn pack(&self, value: T) -> Vec<u8> {
+        value.pack(self.size.clone(), self.endianness.clone())
+    }
 }
 
 impl QuerySize {
@@ -48,6 +94,7 @@ pub trait MemoryPack {
 }
 
 impl MemoryPack for String {
+
     fn pack(self, size: QuerySize, _: Endianness) -> Vec<u8> {
 
         let mut bytes: Vec<u8>;
@@ -70,6 +117,7 @@ impl MemoryPack for String {
 }
 
 impl<'a> MemoryPack for &'a str {
+
     fn pack(self, size: QuerySize, _: Endianness) -> Vec<u8> {
         let mut bytes: Vec<u8>;
         let qsize = size.size(self.len());
@@ -91,6 +139,7 @@ impl<'a> MemoryPack for &'a str {
 
 macro_rules! impl_transmute_pack {
     ($type:ty, $size:expr) => {
+
         impl MemoryPack for $type {
             fn pack(self, size: QuerySize, order: Endianness) -> Vec<u8> {
 
@@ -299,10 +348,11 @@ impl Memory {
         let srange = start..start+len;
 
         self.maps.clone().into_iter().filter(|r| {
+            r.permissions.read() &&
             /* r is smaller than start..start+len */
-            (r.contains_value(start) || r.contains_value(start+len)) ||
+            ((r.contains_value(start) || r.contains_value(start+len)) ||
             /* r is larger than start..start+len */
-            (srange.contains_value(r.start()) || srange.contains_value(r.end()))
+            (srange.contains_value(r.start()) || srange.contains_value(r.end())))
         }).map(|region| {
             let start = region.start();
             let len = region.end()-region.start();
@@ -322,7 +372,7 @@ impl Memory {
 
         while {
             if let Some(found) = find_bytes(&bytes[start..], value.as_ref()) {
-                start = found+1;
+                start += found + 1;
                 regions.push(
                     FoundMemory {
                         region: region.clone(),
