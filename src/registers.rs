@@ -23,6 +23,7 @@ impl Cast<u64> for usize {
     }
 }
 
+
 pub trait Register {
     type Size where
         Self::Size: Cast<usize>,

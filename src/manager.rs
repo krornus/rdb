@@ -7,10 +7,7 @@ use breakpoint::Breakpoint;
 pub struct Manager {
     pid: usize,
     pc: Option<u64>,
-    global_actions: Vec<fn(&Debugger)>,
-    bp_actions: HashMap<u64, Vec<fn(&Debugger)>>,
     breakpoints: HashMap<u64, Breakpoint>,
-    phantom_stack: Vec<Vec<u64>>,
 }
 
 impl Manager {
@@ -26,23 +23,7 @@ impl Manager {
         }
     }
 
-    pub fn set_pc(&mut self, pc: u64) {
-        self.pc = Some(pc);
-    }
-
-    pub fn clear_pc(&mut self) {
-        self.pc = None;
-    }
-
-    pub fn phantom_push(&mut self, exits: Vec<u64>) {
-        self.phantom_stack.push(exits);
-    }
-
-    pub fn phantom_cleanup(&mut self, exits: Vec<u64>) {
-        self.phantom_stack.push(exits);
-    }
-
-    pub fn add(&mut self, addr: u64) -> Result<&mut Breakpoint, DebugError> {
+    pub fn set(&mut self, addr: u64) -> Result<&mut Breakpoint, DebugError> {
 
         let name = format!("breakpoint {}", self.breakpoints.len());
         let bp = Breakpoint::new(name, self.pid as u32, addr)?;
@@ -93,14 +74,12 @@ impl Manager {
         self.bp_actions.entry(bp).or_insert(vec![]).push(fcn);
     }
 
-    pub fn actions(&self, dbg: &Debugger) {
+    pub fn actions(&self, addr: u64) {
 
-        if let Ok(Some(bp)) = self.current() {
-            self.bp_actions.get(&bp.addr)
-                .unwrap_or(&vec![]).iter().map(|fct| {
-                    fct(dbg);
-                }).collect::<Vec<_>>();
-        }
+        self.bp_actions.get(&bp.addr)
+            .unwrap_or(&vec![]).iter().map(|fct| {
+                fct(dbg);
+            }).collect::<Vec<_>>();
 
         for fct in self.global_actions.iter() {
             fct(dbg);

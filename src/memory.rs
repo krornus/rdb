@@ -11,8 +11,8 @@ use twoway::find_bytes;
 
 use error::DebugError;
 
-/* FIXME find way to get system wordsize */
 /* intel defines a WORD as 16 bits */
+/* not using system wordsize thing */
 const WORDSIZE: usize = 2;
 
 
@@ -380,6 +380,7 @@ impl Memory {
                         address: region.start_address + found,
                     }
                 );
+
                 true
             } else {
                 false
